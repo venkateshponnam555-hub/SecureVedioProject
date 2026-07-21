@@ -99,7 +99,7 @@ const Register = () => {
       localStorage.setItem('token', response.accessToken);
       localStorage.setItem('refreshToken', response.refreshToken);
       localStorage.setItem('user', JSON.stringify(response.user));
-      navigate('/dashboard');
+      navigate('/login');
     } catch (error) {
       const message = error.response?.data?.message || 'Registration failed. Please try again.';
       setServerError(message);
