@@ -45,8 +45,7 @@ const WatchVideo = () => {
   const [message, setMessage] = useState('');
   const [messageType, setMessageType] = useState('');
   const [videoBlobUrl, setVideoBlobUrl] = useState(null);
-  const [shareModalOpen, setShareModalOpen] = useState(false);
-  const [shareLink, setShareLink] = useState('');
+ 
   const [shareLoading, setShareLoading] = useState(false);
   const controlsTimeout = useRef(null);
 
@@ -232,9 +231,8 @@ const WatchVideo = () => {
         receiverEmail: receiverEmail.trim()
       });
 
-      setShareLink(response.shareLink || response.share_link || '');
-      setShareModalOpen(true);
-      showMessage('Share link generated successfully');
+      
+      showMessage('Share link sent successfully');
     } catch (err) {
       console.error('Share failed:', err);
       showMessage(err.response?.data?.message || 'Failed to generate share link', 'error');
@@ -543,50 +541,7 @@ const WatchVideo = () => {
           </motion.div>
         </div>
 
-        {/* Share Modal */}
-        {shareModalOpen && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="modal-overlay"
-            onClick={() => setShareModalOpen(false)}
-          >
-            <motion.div
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              className="modal-content"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <h3 className="text-lg font-semibold text-white mb-2">Share Link Generated</h3>
-              <p className="text-sm text-slate-400 mb-4">
-                Share this secure link with the receiver. The link expires in 24 hours.
-              </p>
-              <div className="flex items-center gap-2 mb-4">
-                <input
-                  type="text"
-                  value={shareLink}
-                  readOnly
-                  className="input-field text-sm flex-1"
-                />
-                <button
-                  onClick={() => {
-                    navigator.clipboard.writeText(shareLink);
-                    showMessage('Link copied to clipboard');
-                  }}
-                  className="btn-primary py-2 px-4 text-sm whitespace-nowrap"
-                >
-                  Copy
-                </button>
-              </div>
-              <button
-                onClick={() => setShareModalOpen(false)}
-                className="btn-secondary w-full py-2 text-sm"
-              >
-                Close
-              </button>
-            </motion.div>
-          </motion.div>
-        )}
+       
       </div>
     </div>
   );

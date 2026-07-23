@@ -9,7 +9,7 @@ import com.securevideo.repository.ShareRepository;
 import com.securevideo.repository.VideoChunkRepository;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-
+import org.springframework.beans.factory.annotation.Autowired;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
 import java.security.KeyPair;
@@ -32,10 +32,11 @@ public class ShareService {
 
     private final ShareRepository shareRepository;
     private final VideoChunkRepository videoChunkRepository;
-
-    public ShareService(ShareRepository shareRepository, VideoChunkRepository videoChunkRepository) {
+    private final EmailService emailService;
+    public ShareService(ShareRepository shareRepository, VideoChunkRepository videoChunkRepository,EmailService emailService) {
         this.shareRepository = shareRepository;
         this.videoChunkRepository = videoChunkRepository;
+        this.emailService = emailService;
     }
 
     public Map<String, Object> generateShareLink(String videoId, String senderId, String receiverEmail) {
@@ -62,12 +63,15 @@ public class ShareService {
         shareRepository.save(shareInfo);
 
         String shareLink = shareBaseUrl + "/" + shareToken;
-
+        String senderName = "Your Friend";
+        if (senderId != null) {
+            senderName = senderId;
+        }
+        emailService.sendShareEmail(receiverEmail, senderName, chunks.get(0).getTitle(), shareLink);
         Map<String, Object> response = new HashMap<>();
-        response.put("shareToken", shareToken);
-        response.put("shareLink", shareLink);
-        response.put("expiresAt", shareInfo.getExpiresAt());
-        response.put("eccPublicKey", eccPublicKey);
+        response.put("success", true);
+        response.put("message", "Share link sent successfully");
+        
         return response;
     }
 

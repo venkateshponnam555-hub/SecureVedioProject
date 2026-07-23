@@ -1,4 +1,4 @@
-// frontend/src/pages/MyVideos.jsx
+
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -33,13 +33,20 @@ const MyVideos = () => {
   const [message, setMessage] = useState('');
   const [messageType, setMessageType] = useState('');
 
+  // Share modal state
+  const [shareModalOpen, setShareModalOpen] = useState(false);
+  const [shareVideo, setShareVideo] = useState(null);
+  const [receiverEmail, setReceiverEmail] = useState('');
+  const [shareLoading, setShareLoading] = useState(false);
+  const [emailError, setEmailError] = useState('');
+
   const showMessage = (msg, type = 'success') => {
     setMessage(msg);
     setMessageType(type);
     setTimeout(() => {
       setMessage('');
       setMessageType('');
-    }, 3000);
+    }, 4000);
   };
 
   const fetchVideos = useCallback(async () => {
@@ -102,7 +109,6 @@ const MyVideos = () => {
   const handleDownload = async (video) => {
     try {
       const videoId = video._id || video.id;
-
       const response = await api.get(`/videos/download/${videoId}`, {
         responseType: 'blob',
       });
@@ -131,13 +137,52 @@ const MyVideos = () => {
   };
 
   const handleShare = (video) => {
-    const videoId = video._id || video.id;
-    const url = `${window.location.origin}/watch/${videoId}`;
-    navigator.clipboard.writeText(url).then(() => {
-      showMessage('Video link copied to clipboard');
-    }).catch(() => {
-      showMessage('Failed to copy link', 'error');
-    });
+    setShareVideo(video);
+    setReceiverEmail('');
+    setEmailError('');
+    setShareModalOpen(true);
+  };
+
+  const validateEmail = (email) => {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  };
+
+  const handleSendShareLink = async () => {
+    const email = receiverEmail.trim();
+
+    if (!email) {
+      setEmailError('Email address is required');
+      return;
+    }
+
+    if (!validateEmail(email)) {
+      setEmailError('Please enter a valid email address');
+      return;
+    }
+
+    setEmailError('');
+    setShareLoading(true);
+
+    try {
+      const videoId = shareVideo._id || shareVideo.id;
+
+      await api.post(`/share/generate/${videoId}`, {
+        receiverEmail: email,
+      });
+      setShareModalOpen(false);
+      setShareVideo(null);
+      setReceiverEmail('');
+      setEmailError('');
+
+      showMessage("Share link sent successfully");
+      
+    } catch (error) {
+      console.error('Share failed:', error);
+      const errorMsg = error.response?.data?.message || 'Failed to send share link';
+      showMessage(errorMsg, 'error');
+    } finally {
+      setShareLoading(false);
+    }
   };
 
   const clearFilters = () => {
@@ -397,6 +442,100 @@ const MyVideos = () => {
           </motion.div>
         )}
 
+        {/* Share Modal */}
+        <AnimatePresence>
+          {shareModalOpen && shareVideo && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="modal-overlay"
+              onClick={() => {
+                if (!shareLoading) {
+                  setShareModalOpen(false);
+                  setShareVideo(null);
+                  setReceiverEmail('');
+                  setEmailError('');
+                }
+              }}
+            >
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                className="modal-content"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <h3 className="text-lg font-semibold text-white mb-1">Share Video Securely</h3>
+                <p className="text-sm text-slate-400 mb-5">
+                  Send an encrypted share link for "{shareVideo.title || 'Untitled Video'}"
+                </p>
+
+                <div className="mb-4">
+                  <label htmlFor="receiverEmail" className="label">
+                    Receiver Email Address
+                  </label>
+                  <input
+                    type="email"
+                    id="receiverEmail"
+                    value={receiverEmail}
+                    onChange={(e) => {
+                      setReceiverEmail(e.target.value);
+                      if (emailError) setEmailError('');
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !shareLoading) {
+                        handleSendShareLink();
+                      }
+                    }}
+                    placeholder="receiver@example.com"
+                    className={`input-field ${emailError ? 'input-field-error' : ''}`}
+                    disabled={shareLoading}
+                    autoFocus
+                  />
+                  {emailError && (
+                    <p className="text-red-400 text-xs mt-1.5">{emailError}</p>
+                  )}
+                </div>
+
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => {
+                      setShareModalOpen(false);
+                      setShareVideo(null);
+                      setReceiverEmail('');
+                      setEmailError('');
+                    }}
+                    className="btn-secondary flex-1 py-2.5 text-sm"
+                    disabled={shareLoading}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleSendShareLink}
+                    className="btn-primary flex-1 py-2.5 text-sm flex items-center justify-center gap-2"
+                    disabled={shareLoading}
+                  >
+                    {shareLoading ? (
+                      <>
+                        <motion.div
+                          animate={{ rotate: 360 }}
+                          transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
+                          className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full"
+                        />
+                        Sending...
+                      </>
+                    ) : (
+                      'Send Secure Link'
+                    )}
+                  </button>
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Delete Confirmation Modal */}
         <AnimatePresence>
           {deleteConfirm && (
             <motion.div

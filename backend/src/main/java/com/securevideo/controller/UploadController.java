@@ -27,8 +27,8 @@ public class UploadController {
                                           @RequestParam(value = "description", defaultValue = "") String description,
                                           @RequestParam(value = "tags", defaultValue = "[]") String tags,
                                           @RequestParam(value = "encrypt", defaultValue = "true") boolean encrypt,
+                                          @RequestParam(value = "networkSpeedMbps", defaultValue = "10") double networkSpeedMbps,
                                           @RequestHeader("Authorization") String authHeader) {
-        System.out.println("UPLOAD API HIT");
         try {
             if (file.isEmpty()) {
                 return ResponseEntity.badRequest()
@@ -39,7 +39,7 @@ public class UploadController {
             String userId = JwtUtil.getUserIdFromToken(token);
 
             Map<String, Object> response = uploadService.uploadVideo(
-                    file, title, description, tags, userId, encrypt);
+                    file, title, description, tags, userId, encrypt, networkSpeedMbps);
 
             return ResponseEntity.status(HttpStatus.CREATED).body(response);
         } catch (Exception e) {
@@ -47,9 +47,7 @@ public class UploadController {
             e.printStackTrace();
             System.out.println("==================================");
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of(
-                            "message", "Upload failed: " + e.getMessage()
-                    ));
+                    .body(Map.of("message", "Upload failed: " + e.getMessage()));
         }
     }
 

@@ -23,8 +23,6 @@ import java.util.*;
 @Service
 public class UploadService {
 
-    private static final int CHUNK_SIZE = 10 * 1024 * 1024; // 10 MB per chunk
-
     private final ChunkService chunkService;
     private final VideoChunkRepository videoChunkRepository;
 
@@ -61,55 +59,94 @@ public class UploadService {
             Files.createDirectories(Paths.get(chunksPath));
             Files.createDirectories(Paths.get(videosPath));
         } catch (IOException e) {
+            System.out.println("========================================");
+            System.out.println("UPLOAD FAILED");
+            System.out.println("Reason: " + e.getMessage());
+            System.out.println("========================================");
             throw new RuntimeException("Failed to create storage directories: " + e.getMessage(), e);
         }
     }
 
-    /**
-     * Upload video file, split into chunks, encrypt each chunk
-     */
+    private int getAdaptiveChunkSize(double networkSpeedMbps) {
+        System.out.println("========================================");
+        System.out.println("NETWORK ANALYSIS");
+        System.out.println("========================================");
+        
+        int chunkSize;
+         
+        if (networkSpeedMbps < 5) {
+            chunkSize = 512 * 1024; // 512 KB for slow connections
+        } else if (networkSpeedMbps < 20) {
+            chunkSize = 2 * 1024 * 1024; // 2 MB for medium connections
+        } else {
+            chunkSize = 4 * 1024 * 1024; // 4 MB for fast connections
+        }
+        System.out.println("Network Speed: " + networkSpeedMbps + " Mbps");
+        if (chunkSize >= 1024 * 1024) {
+            System.out.println("Selected Chunk Size: " + (chunkSize / (1024 * 1024)) + " MB");
+        } else {
+            System.out.println("Selected Chunk Size: " + (chunkSize / 1024) + " KB");
+        }
+        return chunkSize;
+    }
+
     public Map<String, Object> uploadVideo(MultipartFile file, String title, String description,
-                                            String tags, String userId, boolean encrypt) {
+                                            String tags, String userId, boolean encrypt,
+                                            double networkSpeedMbps) {
         try {
             String videoId = KeyGeneratorUtil.generateVideoId();
 
-            // Ensure directories exist before saving
             Path videoDir = Paths.get(videosPath);
             if (!Files.exists(videoDir)) {
                 Files.createDirectories(videoDir);
             }
 
-            // Save original video using absolute path
             Path tempFilePath = videoDir.resolve(videoId + "_original");
-            System.out.println("Saving video to: " + tempFilePath.toAbsolutePath());
             file.transferTo(tempFilePath.toFile());
+
+            System.out.println("========================================");
+            System.out.println("VIDEO UPLOAD STARTED");
+            System.out.println("========================================");
+            System.out.println("Video ID: " + videoId);
+            System.out.println("Title: " + title);
+            System.out.println("Original File: " + file.getOriginalFilename());
+            System.out.println("File Size: " + file.getSize() + " bytes");
+            System.out.println("Storage Path: " + tempFilePath.toAbsolutePath());
+            System.out.println("========================================");
 
             File tempFile = tempFilePath.toFile();
 
-            // Split into chunks - status becomes CHUNKED in database
-            List<VideoChunk> chunks = chunkService.splitVideo(tempFile, videoId, userId, CHUNK_SIZE);
+            int chunkSize = getAdaptiveChunkSize(networkSpeedMbps);
+            List<VideoChunk> chunks = chunkService.splitVideo(tempFile, videoId, userId, chunkSize);
 
-            // Generate AES key for this video
+            System.out.println("========================================");
+            System.out.println("VIDEO CHUNKING COMPLETED");
+            System.out.println("========================================");
+            System.out.println("Video ID: " + videoId);
+            System.out.println("Total Chunks: " + chunks.size());
+            if (chunkSize >= 1024 * 1024) {
+                System.out.println("Chunk Size: " + (chunkSize / (1024 * 1024)) + " MB");
+            } else {
+                System.out.println("Chunk Size: " + (chunkSize / 1024) + " KB");
+            }
+            System.out.println("========================================");
+
             SecretKey aesKey = KeyGeneratorUtil.generateAESKey();
             String aesKeyBase64 = KeyGeneratorUtil.secretKeyToBase64(aesKey);
 
-            // Generate ECC key pair for sender
             KeyPair eccKeyPair = KeyGeneratorUtil.generateECCKeyPair();
             String eccPublicKey = KeyGeneratorUtil.publicKeyToBase64(eccKeyPair.getPublic());
             String eccPrivateKey = KeyGeneratorUtil.privateKeyToBase64(eccKeyPair.getPrivate());
 
-            // Encrypt each chunk if requested
             if (encrypt) {
-                // Stage 1: ENCRYPTING_AES
                 System.out.println("Stage 1: Setting all chunks to ENCRYPTING_AES");
                 for (int i = 0; i < chunks.size(); i++) {
                     VideoChunk chunk = chunks.get(i);
+                    chunk.setChunkSizeBytes(chunkSize);
                     chunk.setEncryptionStatus("ENCRYPTING_AES");
                     videoChunkRepository.save(chunk);
-                    System.out.println("Chunk " + i + " status set to ENCRYPTING_AES");
                 }
 
-                // Stage 2: Perform AES encryption -> AES_DONE
                 System.out.println("Stage 2: Encrypting all chunks with AES");
                 for (int i = 0; i < chunks.size(); i++) {
                     VideoChunk chunk = chunks.get(i);
@@ -118,34 +155,38 @@ public class UploadService {
                         chunk.setAesKeyEncrypted(aesKeyBase64);
                         chunk.setEncryptionStatus("AES_DONE");
                         videoChunkRepository.save(chunk);
-                        System.out.println("Chunk " + i + " encrypted successfully, status: AES_DONE");
                     } catch (Exception e) {
                         System.err.println("Failed to encrypt chunk " + i + ": " + e.getMessage());
                         chunk.setEncryptionStatus("FAILED");
                         videoChunkRepository.save(chunk);
+                        System.out.println("========================================");
+                        System.out.println("UPLOAD FAILED");
+                        System.out.println("Reason: Encryption failed for chunk " + i + " - " + e.getMessage());
+                        System.out.println("========================================");
                         throw new RuntimeException("Encryption failed for chunk " + i + ": " + e.getMessage(), e);
                     }
                 }
 
-                // Stage 3: Final -> ENCRYPTED
                 System.out.println("Stage 3: Setting all chunks to ENCRYPTED");
                 for (int i = 0; i < chunks.size(); i++) {
                     VideoChunk chunk = chunks.get(i);
-                    System.out.println("Chunk " + i + " current status before final update: " + chunk.getEncryptionStatus());
                     chunk.setEncryptionStatus("ENCRYPTED");
                     videoChunkRepository.save(chunk);
-                    System.out.println("Chunk " + i + " status after save: ENCRYPTED");
                 }
 
-                // Verification
-                System.out.println("Verifying final status of all chunks...");
-                List<VideoChunk> verifyChunks = videoChunkRepository.findByVideoId(videoId);
-                for (int i = 0; i < verifyChunks.size(); i++) {
-                    System.out.println("Verification - Chunk " + i + " status: " + verifyChunks.get(i).getEncryptionStatus());
+                System.out.println("========================================");
+                System.out.println("VIDEO ENCRYPTION COMPLETED");
+                System.out.println("========================================");
+                System.out.println("Encrypted Chunks: " + chunks.size());
+                System.out.println("AES Encryption : SUCCESS");
+                System.out.println("========================================");
+            } else {
+                for (VideoChunk chunk : chunks) {
+                    chunk.setChunkSizeBytes(chunkSize);
+                    videoChunkRepository.save(chunk);
                 }
             }
 
-            // Set metadata on first chunk
             if (!chunks.isEmpty()) {
                 VideoChunk firstChunk = chunks.get(0);
                 firstChunk.setTitle(title);
@@ -157,7 +198,6 @@ public class UploadService {
                 videoChunkRepository.save(firstChunk);
             }
 
-            // Clean up temp file
             tempFile.delete();
 
             Map<String, Object> response = new HashMap<>();
@@ -171,46 +211,39 @@ public class UploadService {
             response.put("eccPublicKey", eccPublicKey);
             response.put("createdAt", Instant.now());
 
+            System.out.println("========================================");
+            System.out.println("UPLOAD COMPLETED SUCCESSFULLY");
+            System.out.println("========================================");
+            System.out.println("Video ID: " + videoId);
+            System.out.println("Title: " + title);
+            System.out.println("File Size: " + file.getSize() + " bytes");
+            System.out.println("Total Chunks: " + chunks.size());
+            System.out.println("Encryption Status: " + (encrypt ? "ENCRYPTED" : "UNENCRYPTED"));
+            System.out.println("ECC Public Key Generated: YES");
+            System.out.println("========================================");
+
             return response;
         } catch (IOException e) {
+            System.out.println("========================================");
+            System.out.println("UPLOAD FAILED");
+            System.out.println("Reason: " + e.getMessage());
+            System.out.println("========================================");
             throw new RuntimeException("Video upload failed: " + e.getMessage(), e);
         }
     }
 
-    /**
-     * Get encryption status for polling
-     * Returns stages: CHUNKED -> ENCRYPTING_AES -> AES_DONE -> ENCRYPTED
-     */
     public Map<String, Object> getEncryptionStatus(String videoId) {
         List<VideoChunk> chunks = videoChunkRepository.findByVideoId(videoId);
-
-        if (chunks.isEmpty()) {
-            throw new RuntimeException("Video not found: " + videoId);
-        }
-
+        if (chunks.isEmpty()) throw new RuntimeException("Video not found: " + videoId);
         int totalChunks = chunks.size();
-
-        long encryptedCount = chunks.stream()
-                .filter(c -> "ENCRYPTED".equals(c.getEncryptionStatus()))
-                .count();
-        long aesDoneCount = chunks.stream()
-                .filter(c -> "AES_DONE".equals(c.getEncryptionStatus()))
-                .count();
-        long encryptingCount = chunks.stream()
-                .filter(c -> "ENCRYPTING_AES".equals(c.getEncryptionStatus()))
-                .count();
-
+        long encryptedCount = chunks.stream().filter(c -> "ENCRYPTED".equals(c.getEncryptionStatus())).count();
+        long aesDoneCount = chunks.stream().filter(c -> "AES_DONE".equals(c.getEncryptionStatus())).count();
+        long encryptingCount = chunks.stream().filter(c -> "ENCRYPTING_AES".equals(c.getEncryptionStatus())).count();
         String stage;
-        if (encryptedCount == totalChunks) {
-            stage = "ENCRYPTED";
-        } else if (aesDoneCount == totalChunks) {
-            stage = "AES_DONE";
-        } else if (encryptingCount > 0 || aesDoneCount > 0 || encryptedCount > 0) {
-            stage = "ENCRYPTING_AES";
-        } else {
-            stage = "CHUNKED";
-        }
-
+        if (encryptedCount == totalChunks) stage = "ENCRYPTED";
+        else if (aesDoneCount == totalChunks) stage = "AES_DONE";
+        else if (encryptingCount > 0 || aesDoneCount > 0 || encryptedCount > 0) stage = "ENCRYPTING_AES";
+        else stage = "CHUNKED";
         Map<String, Object> status = new HashMap<>();
         status.put("stage", stage);
         status.put("videoId", videoId);
@@ -219,51 +252,29 @@ public class UploadService {
         return status;
     }
 
-    /**
-     * Get all videos for a user
-     */
     public List<Map<String, Object>> getUserVideos(String userId) {
         List<VideoChunk> allChunks = videoChunkRepository.findByUserIdOrderByCreatedAtDesc(userId);
-
         Map<String, List<VideoChunk>> groupedByVideo = new LinkedHashMap<>();
         for (VideoChunk chunk : allChunks) {
             groupedByVideo.computeIfAbsent(chunk.getVideoId(), k -> new ArrayList<>()).add(chunk);
         }
-
         List<Map<String, Object>> videos = new ArrayList<>();
         for (Map.Entry<String, List<VideoChunk>> entry : groupedByVideo.entrySet()) {
             String videoId = entry.getKey();
             List<VideoChunk> videoChunks = entry.getValue();
-
             if (videoChunks.isEmpty()) continue;
-
             VideoChunk metadataChunk = videoChunks.get(0);
-
             int totalChunks = videoChunks.size();
-            long encryptedCount = videoChunks.stream()
-                    .filter(c -> "ENCRYPTED".equals(c.getEncryptionStatus()))
-                    .count();
-
+            long encryptedCount = videoChunks.stream().filter(c -> "ENCRYPTED".equals(c.getEncryptionStatus())).count();
             String overallStatus;
-            if (encryptedCount == totalChunks) {
-                overallStatus = "ENCRYPTED";
-            } else if (encryptedCount > 0) {
-                overallStatus = "PROCESSING";
-            } else {
-                long aesDoneCount = videoChunks.stream()
-                        .filter(c -> "AES_DONE".equals(c.getEncryptionStatus()))
-                        .count();
-                long processingCount = videoChunks.stream()
-                        .filter(c -> "ENCRYPTING_AES".equals(c.getEncryptionStatus()))
-                        .count();
-                if (aesDoneCount > 0 || processingCount > 0) {
-                    overallStatus = "PROCESSING";
-                } else {
-                    overallStatus = metadataChunk.getEncryptionStatus() != null
-                            ? metadataChunk.getEncryptionStatus() : "UNENCRYPTED";
-                }
+            if (encryptedCount == totalChunks) overallStatus = "ENCRYPTED";
+            else if (encryptedCount > 0) overallStatus = "PROCESSING";
+            else {
+                long aesDoneCount = videoChunks.stream().filter(c -> "AES_DONE".equals(c.getEncryptionStatus())).count();
+                long processingCount = videoChunks.stream().filter(c -> "ENCRYPTING_AES".equals(c.getEncryptionStatus())).count();
+                if (aesDoneCount > 0 || processingCount > 0) overallStatus = "PROCESSING";
+                else overallStatus = metadataChunk.getEncryptionStatus() != null ? metadataChunk.getEncryptionStatus() : "UNENCRYPTED";
             }
-
             Map<String, Object> video = new HashMap<>();
             video.put("_id", videoId);
             video.put("id", videoId);
@@ -277,47 +288,24 @@ public class UploadService {
             video.put("totalChunks", metadataChunk.getTotalChunks());
             videos.add(video);
         }
-
         return videos;
     }
 
-    /**
-     * Get single video metadata
-     */
     public Map<String, Object> getVideoById(String videoId, String userId) {
         List<VideoChunk> chunks = videoChunkRepository.findByVideoId(videoId);
-
-        if (chunks.isEmpty()) {
-            throw new RuntimeException("Video not found");
-        }
-
+        if (chunks.isEmpty()) throw new RuntimeException("Video not found");
         VideoChunk firstChunk = chunks.get(0);
-
         int totalChunks = chunks.size();
-        long encryptedCount = chunks.stream()
-                .filter(c -> "ENCRYPTED".equals(c.getEncryptionStatus()))
-                .count();
-
+        long encryptedCount = chunks.stream().filter(c -> "ENCRYPTED".equals(c.getEncryptionStatus())).count();
         String overallStatus;
-        if (encryptedCount == totalChunks) {
-            overallStatus = "ENCRYPTED";
-        } else if (encryptedCount > 0) {
-            overallStatus = "PROCESSING";
-        } else {
-            long aesDoneCount = chunks.stream()
-                    .filter(c -> "AES_DONE".equals(c.getEncryptionStatus()))
-                    .count();
-            long processingCount = chunks.stream()
-                    .filter(c -> "ENCRYPTING_AES".equals(c.getEncryptionStatus()))
-                    .count();
-            if (aesDoneCount > 0 || processingCount > 0) {
-                overallStatus = "PROCESSING";
-            } else {
-                overallStatus = firstChunk.getEncryptionStatus() != null
-                        ? firstChunk.getEncryptionStatus() : "UNENCRYPTED";
-            }
+        if (encryptedCount == totalChunks) overallStatus = "ENCRYPTED";
+        else if (encryptedCount > 0) overallStatus = "PROCESSING";
+        else {
+            long aesDoneCount = chunks.stream().filter(c -> "AES_DONE".equals(c.getEncryptionStatus())).count();
+            long processingCount = chunks.stream().filter(c -> "ENCRYPTING_AES".equals(c.getEncryptionStatus())).count();
+            if (aesDoneCount > 0 || processingCount > 0) overallStatus = "PROCESSING";
+            else overallStatus = firstChunk.getEncryptionStatus() != null ? firstChunk.getEncryptionStatus() : "UNENCRYPTED";
         }
-
         Map<String, Object> video = new HashMap<>();
         video.put("_id", videoId);
         video.put("id", videoId);
@@ -333,25 +321,16 @@ public class UploadService {
         return video;
     }
 
-    /**
-     * Delete a video and all its chunks
-     */
     public void deleteVideo(String videoId, String userId) {
         List<VideoChunk> chunks = videoChunkRepository.findByVideoId(videoId);
-
         for (VideoChunk chunk : chunks) {
             try {
-                if (chunk.getChunkStoragePath() != null) {
-                    Files.deleteIfExists(Paths.get(chunk.getChunkStoragePath()));
-                }
-                if (chunk.getEncryptedStoragePath() != null) {
-                    Files.deleteIfExists(Paths.get(chunk.getEncryptedStoragePath()));
-                }
+                if (chunk.getChunkStoragePath() != null) Files.deleteIfExists(Paths.get(chunk.getChunkStoragePath()));
+                if (chunk.getEncryptedStoragePath() != null) Files.deleteIfExists(Paths.get(chunk.getEncryptedStoragePath()));
             } catch (IOException e) {
                 System.err.println("Failed to delete chunk file: " + e.getMessage());
             }
         }
-
         videoChunkRepository.deleteByVideoId(videoId);
     }
 

@@ -86,10 +86,19 @@ public class ChunkService {
                 videoChunk.setChunkStoragePath(chunkFilePath.toString());
                 videoChunk.setChunkHash(chunkHash);
                 videoChunk.setUserId(userId);
+                videoChunk.setChunkSizeBytes(chunkSizeBytes);
                 videoChunk.setEncryptionStatus("CHUNKED");
 
 
                 chunks.add(videoChunk);
+                String size;
+                if (bytesRead >= 1024 * 1024) {
+                    size = (bytesRead / (1024 * 1024)) + " MB";
+                } else {
+                    size = (bytesRead / 1024) + " KB";
+                }
+                System.out.println("Created chunk: " + chunkFileName + " | Size: " + size);
+
 
                 chunkIndex++;
             }

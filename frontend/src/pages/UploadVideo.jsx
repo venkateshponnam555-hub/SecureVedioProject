@@ -98,6 +98,16 @@ const UploadVideo = () => {
       formData.append('tags', JSON.stringify(tags));
       formData.append('encrypt', encryptAfterUpload.toString());
 
+      // Detect network speed and send to backend for adaptive chunk sizing
+      const connection =
+      navigator.connection ||
+      navigator.mozConnection ||
+      navigator.webkitConnection;
+
+      const networkSpeedMbps = connection?.downlink ?? 10;
+      formData.append('networkSpeedMbps', networkSpeedMbps.toString());
+      console.log('Detected Network Speed:', `${networkSpeedMbps} Mbps`);
+
       const response = await videoService.uploadVideo(formData, (progress) => {
         setUploadProgress(progress);
       });
