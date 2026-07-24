@@ -212,6 +212,28 @@ public class ShareService {
         response.put("status", shareInfo.getStatus());
         response.put("expiresAt", shareInfo.getExpiresAt());
 
+        Instant now = Instant.now();
+        boolean otpPending =
+                !shareInfo.isReceiverVerified()
+                        && shareInfo.getOtp() != null
+                        && shareInfo.getOtpExpiry() != null
+                        && now.isBefore(shareInfo.getOtpExpiry());
+
+        response.put("otpPending", otpPending);
+        response.put(
+                "otpExpiresAt",
+                otpPending ? shareInfo.getOtpExpiry() : null
+        );
+        response.put(
+                "resendAvailableAt",
+                shareInfo.getOtpSentAt() == null
+                        ? null
+                        : shareInfo.getOtpSentAt().plus(
+                                OTP_RESEND_COOLDOWN_SECONDS,
+                                ChronoUnit.SECONDS
+                        )
+        );
+
         /*
          * Do not expose receiver's complete email.
          * Frontend can display masked email.
@@ -261,26 +283,81 @@ public class ShareService {
 
         Instant now = Instant.now();
 
-        if (shareInfo.getOtpSentAt() != null) {
-            Instant resendAllowedAt =
-                    shareInfo.getOtpSentAt().plus(
-                            OTP_RESEND_COOLDOWN_SECONDS,
-                            ChronoUnit.SECONDS
-                    );
-
-            if (now.isBefore(resendAllowedAt)) {
-                long remainingSeconds =
-                        ChronoUnit.SECONDS.between(
-                                now,
-                                resendAllowedAt
+        /*
+         * Mobile workflow fix:
+         * When a valid OTP already exists for this account, do not
+         * generate or email another OTP. Restore the same OTP session.
+         */
+        boolean existingOtpIsValid =
+                shareInfo.getOtp() != null
+                        && shareInfo.getOtpExpiry() != null
+                        && now.isBefore(shareInfo.getOtpExpiry())
+                        && receiverUserId.equals(
+                                shareInfo.getReceiverUserId()
                         );
 
-                throw new RuntimeException(
-                        "Please wait " +
-                                remainingSeconds +
-                                " seconds before requesting another OTP"
-                );
-            }
+        if (existingOtpIsValid) {
+            long remainingSeconds =
+                    Math.max(
+                            0,
+                            ChronoUnit.SECONDS.between(
+                                    now,
+                                    shareInfo.getOtpExpiry()
+                            )
+                    );
+
+            Instant resendAvailableAt =
+                    shareInfo.getOtpSentAt() == null
+                            ? now
+                            : shareInfo.getOtpSentAt().plus(
+                                    OTP_RESEND_COOLDOWN_SECONDS,
+                                    ChronoUnit.SECONDS
+                            );
+
+            Map<String, Object> response =
+                    new HashMap<>();
+
+            response.put("success", true);
+            response.put(
+                    "message",
+                    "OTP was already sent and is still valid"
+            );
+            response.put("alreadySent", true);
+            response.put(
+                    "receiverEmailMasked",
+                    maskEmail(shareInfo.getReceiverEmail())
+            );
+            response.put(
+                    "otpExpiresAt",
+                    shareInfo.getOtpExpiry()
+            );
+            response.put(
+                    "otpExpiresInSeconds",
+                    remainingSeconds
+            );
+            response.put(
+                    "resendAvailableAt",
+                    resendAvailableAt
+            );
+            response.put(
+                    "resendCooldownSeconds",
+                    Math.max(
+                            0,
+                            ChronoUnit.SECONDS.between(
+                                    now,
+                                    resendAvailableAt
+                            )
+                    )
+            );
+
+            return response;
+        }
+
+        if (shareInfo.getOtpExpiry() != null
+                && !now.isBefore(shareInfo.getOtpExpiry())) {
+
+            clearOtp(shareInfo);
+            shareInfo.setStatus("OTP_EXPIRED");
         }
 
         String otp = generateOtp();
@@ -313,6 +390,7 @@ public class ShareService {
                 "message",
                 "OTP sent successfully"
         );
+        response.put("alreadySent", false);
         response.put(
                 "receiverEmailMasked",
                 maskEmail(shareInfo.getReceiverEmail())
@@ -322,8 +400,19 @@ public class ShareService {
                 OTP_EXPIRY_MINUTES
         );
         response.put(
+                "otpExpiresAt",
+                shareInfo.getOtpExpiry()
+        );
+        response.put(
                 "resendCooldownSeconds",
                 OTP_RESEND_COOLDOWN_SECONDS
+        );
+        response.put(
+                "resendAvailableAt",
+                now.plus(
+                        OTP_RESEND_COOLDOWN_SECONDS,
+                        ChronoUnit.SECONDS
+                )
         );
 
         return response;
@@ -370,6 +459,14 @@ public class ShareService {
 
             throw new IllegalAccessException(
                     "This OTP was not generated for your account"
+            );
+        }
+
+        if (enteredOtp == null ||
+                !enteredOtp.matches("\\d{6}")) {
+
+            throw new RuntimeException(
+                    "Enter a valid 6-digit OTP"
             );
         }
 
@@ -775,6 +872,7 @@ public class ShareService {
 
         shareInfo.setOtp(null);
         shareInfo.setOtpExpiry(null);
+        shareInfo.setOtpSentAt(null);
         shareInfo.setOtpAttempts(0);
     }
 

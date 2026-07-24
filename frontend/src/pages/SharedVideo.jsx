@@ -1,5 +1,3 @@
-// frontend/src/pages/SharedVideo.jsx
-
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
@@ -18,9 +16,81 @@ import {
 import { videoService } from '../services/videoService';
 import { api } from '../services/api';
 
-const getSafePendingSharePath = () => {
-  const path = sessionStorage.getItem('pendingSharePath');
-  return path && path.startsWith('/share/') ? path : null;
+const OTP_STATE_PREFIX = 'secureVideoOtpState:';
+
+const getOtpStorageKey = (shareToken) =>
+  `${OTP_STATE_PREFIX}${shareToken}`;
+
+const readStoredOtpState = (shareToken) => {
+  try {
+    const raw = localStorage.getItem(getOtpStorageKey(shareToken));
+    if (!raw) return null;
+
+    const state = JSON.parse(raw);
+
+    if (
+      state?.shareToken !== shareToken ||
+      !state?.otpSent ||
+      !state?.otpExpiresAt
+    ) {
+      localStorage.removeItem(getOtpStorageKey(shareToken));
+      return null;
+    }
+
+    if (Date.now() >= new Date(state.otpExpiresAt).getTime()) {
+      localStorage.removeItem(getOtpStorageKey(shareToken));
+      return null;
+    }
+
+    return state;
+  } catch {
+    localStorage.removeItem(getOtpStorageKey(shareToken));
+    return null;
+  }
+};
+
+const saveOtpState = (shareToken, data = {}) => {
+  const state = {
+    shareToken,
+    otpSent: true,
+    otpExpiresAt:
+      data.otpExpiresAt ||
+      new Date(
+        Date.now() +
+          (data.otpExpiresInMinutes || 5) * 60 * 1000
+      ).toISOString(),
+    resendAvailableAt:
+      data.resendAvailableAt ||
+      new Date(
+        Date.now() +
+          (data.resendCooldownSeconds ?? 60) * 1000
+      ).toISOString(),
+    receiverEmailMasked: data.receiverEmailMasked || '',
+  };
+
+  localStorage.setItem(
+    getOtpStorageKey(shareToken),
+    JSON.stringify(state)
+  );
+
+  return state;
+};
+
+const clearOtpState = (shareToken) => {
+  localStorage.removeItem(getOtpStorageKey(shareToken));
+};
+
+const getRemainingSeconds = (dateValue) => {
+  if (!dateValue) return 0;
+
+  const targetTime = new Date(dateValue).getTime();
+
+  if (Number.isNaN(targetTime)) return 0;
+
+  return Math.max(
+    0,
+    Math.ceil((targetTime - Date.now()) / 1000)
+  );
 };
 
 const SharedVideo = () => {
@@ -56,34 +126,80 @@ const SharedVideo = () => {
 
   const otpRequestedRef = useRef(false);
   const resendTimerRef = useRef(null);
+  const videoBlobUrlRef = useRef(null);
 
   const isLoggedIn = !!localStorage.getItem('token');
 
-  useEffect(() => {
-    fetchShareData();
-    return () => {
-      if (videoBlobUrl) URL.revokeObjectURL(videoBlobUrl);
-      if (resendTimerRef.current) clearInterval(resendTimerRef.current);
-    };
-  }, [shareToken]);
+  const restoreOtpUi = (state) => {
+    if (!state) return false;
+
+    setOtpSent(true);
+    setMaskedEmail(
+      state.receiverEmailMasked || maskedEmail
+    );
+    setResendSeconds(
+      getRemainingSeconds(state.resendAvailableAt)
+    );
+    setOtpMessage(
+      'OTP was already sent. Enter the same OTP from your email.'
+    );
+
+    return true;
+  };
 
   const fetchShareData = async () => {
     setLoading(true);
     setError('');
+
     try {
       const response = await api.get(`/share/${shareToken}`);
-      setShareData(response.data);
+      const data = response.data;
 
-      if (response.data.receiverEmailMasked) {
-        setMaskedEmail(response.data.receiverEmailMasked);
+      setShareData(data);
+
+      if (data.receiverEmailMasked) {
+        setMaskedEmail(data.receiverEmailMasked);
       }
 
-      if (response.data.receiverVerified) {
+      if (data.receiverVerified) {
         setOtpVerified(true);
         setOtpSent(true);
+        clearOtpState(shareToken);
+        return;
+      }
+
+      /*
+       * Backend is the source of truth. When an OTP is still valid,
+       * restore the OTP form instead of automatically sending another one.
+       */
+      if (data.otpPending && data.otpExpiresAt) {
+        const restoredState = saveOtpState(shareToken, {
+          otpExpiresAt: data.otpExpiresAt,
+          resendAvailableAt: data.resendAvailableAt,
+          receiverEmailMasked: data.receiverEmailMasked,
+          resendCooldownSeconds: 0,
+        });
+
+        restoreOtpUi(restoredState);
+        otpRequestedRef.current = true;
+        return;
+      }
+
+      /*
+       * localStorage covers temporary app switching or page restoration
+       * while the backend request is still being completed.
+       */
+      const storedState = readStoredOtpState(shareToken);
+
+      if (storedState) {
+        restoreOtpUi(storedState);
+        otpRequestedRef.current = true;
+      } else {
+        clearOtpState(shareToken);
       }
     } catch (err) {
       console.error('Failed to access shared video:', err);
+
       if (err.response?.status === 410) {
         setError('This share link has expired.');
       } else if (err.response?.status === 403) {
@@ -91,85 +207,167 @@ const SharedVideo = () => {
       } else if (err.response?.status === 404) {
         setError('Invalid share link.');
       } else {
-        setError(err.response?.data?.message || 'Failed to access shared video.');
+        setError(
+          err.response?.data?.message ||
+            'Failed to access shared video.'
+        );
       }
     } finally {
       setLoading(false);
     }
   };
 
+  useEffect(() => {
+    otpRequestedRef.current = false;
+    fetchShareData();
+
+    return () => {
+      if (videoBlobUrlRef.current) {
+        URL.revokeObjectURL(videoBlobUrlRef.current);
+      }
+
+      if (resendTimerRef.current) {
+        clearInterval(resendTimerRef.current);
+      }
+    };
+  }, [shareToken]);
+
+  useEffect(() => {
+    videoBlobUrlRef.current = videoBlobUrl;
+  }, [videoBlobUrl]);
+
   // Check login and redirect if needed
   useEffect(() => {
     if (!loading && shareData && !isLoggedIn) {
-      sessionStorage.setItem('pendingSharePath', `/share/${shareToken}`);
+      sessionStorage.setItem(
+        'pendingSharePath',
+        `/share/${shareToken}`
+      );
       navigate('/login', { replace: true });
     }
-  }, [loading, shareData, isLoggedIn]);
+  }, [
+    loading,
+    shareData,
+    isLoggedIn,
+    navigate,
+    shareToken,
+  ]);
 
-  // Auto-send OTP after login and share data loaded
+  // Auto-send only when no valid OTP session can be restored.
   useEffect(() => {
     if (
       !loading &&
       shareData &&
       isLoggedIn &&
       !otpVerified &&
+      !otpSent &&
       !otpRequestedRef.current
     ) {
       otpRequestedRef.current = true;
       handleSendOtp();
     }
-  }, [loading, shareData, isLoggedIn, otpVerified]);
+  }, [
+    loading,
+    shareData,
+    isLoggedIn,
+    otpVerified,
+    otpSent,
+  ]);
 
   // Resend countdown
   useEffect(() => {
-    if (resendSeconds > 0) {
-      resendTimerRef.current = setInterval(() => {
-        setResendSeconds((prev) => {
-          if (prev <= 1) {
-            clearInterval(resendTimerRef.current);
-            return 0;
-          }
-          return prev - 1;
-        });
-      }, 1000);
+    if (resendTimerRef.current) {
+      clearInterval(resendTimerRef.current);
     }
+
+    if (resendSeconds <= 0) {
+      return undefined;
+    }
+
+    resendTimerRef.current = setInterval(() => {
+      setResendSeconds((previous) => {
+        if (previous <= 1) {
+          clearInterval(resendTimerRef.current);
+          resendTimerRef.current = null;
+          return 0;
+        }
+
+        return previous - 1;
+      });
+    }, 1000);
+
     return () => {
-      if (resendTimerRef.current) clearInterval(resendTimerRef.current);
+      if (resendTimerRef.current) {
+        clearInterval(resendTimerRef.current);
+        resendTimerRef.current = null;
+      }
     };
-  }, [resendSeconds]);
+  }, [resendSeconds > 0]);
 
   const handleSendOtp = async () => {
     setOtpSending(true);
     setOtpMessage('');
     setOtpError('');
     setWrongReceiver(false);
-    try {
-      const response = await api.post(`/share/send-otp/${shareToken}`);
 
-      if (response.data.alreadyVerified) {
+    try {
+      const response = await api.post(
+        `/share/send-otp/${shareToken}`
+      );
+
+      const data = response.data;
+
+      if (data.alreadyVerified) {
         setOtpVerified(true);
         setOtpSent(true);
         setOtpMessage('You are already verified.');
+        clearOtpState(shareToken);
         return;
       }
 
+      const storedState = saveOtpState(
+        shareToken,
+        data
+      );
+
       setOtpSent(true);
-      setOtpMessage(response.data.message || 'OTP sent successfully');
-      setMaskedEmail(response.data.receiverEmailMasked || maskedEmail);
-      setResendSeconds(response.data.resendCooldownSeconds || 60);
+      setOtpMessage(
+        data.alreadySent
+          ? 'OTP was already sent and is still valid.'
+          : data.message || 'OTP sent successfully'
+      );
+      setMaskedEmail(
+        data.receiverEmailMasked ||
+          storedState.receiverEmailMasked ||
+          maskedEmail
+      );
+      setResendSeconds(
+        getRemainingSeconds(
+          storedState.resendAvailableAt
+        )
+      );
       setOtp('');
       setOtpError('');
     } catch (err) {
       if (err.response?.status === 403) {
         setWrongReceiver(true);
-        setOtpError('This video was shared with a different email account.');
+        setOtpError(
+          'This video was shared with a different email account.'
+        );
       } else if (err.response?.status === 401) {
-        sessionStorage.setItem('pendingSharePath', `/share/${shareToken}`);
+        sessionStorage.setItem(
+          'pendingSharePath',
+          `/share/${shareToken}`
+        );
         localStorage.removeItem('token');
+        localStorage.removeItem('refreshToken');
         localStorage.removeItem('user');
         navigate('/login', { replace: true });
       } else {
-        setOtpError(err.response?.data?.message || 'Failed to send OTP');
+        setOtpError(
+          err.response?.data?.message ||
+            'Failed to send OTP'
+        );
       }
     } finally {
       setOtpSending(false);
@@ -178,24 +376,52 @@ const SharedVideo = () => {
 
   const handleVerifyOtp = async () => {
     if (otp.length !== 6) return;
+
     setOtpVerifying(true);
     setOtpError('');
+
     try {
-      const response = await api.post(`/share/verify-otp/${shareToken}`, {
-        otp: otp,
-      });
+      const response = await api.post(
+        `/share/verify-otp/${shareToken}`,
+        { otp }
+      );
 
       if (response.data.verified) {
         setOtpVerified(true);
-        setOtpMessage('Email verified successfully!');
+        setOtpSent(true);
+        setOtpMessage(
+          'Email verified successfully!'
+        );
         setOtpError('');
+        setResendSeconds(0);
+        setOtp('');
+        clearOtpState(shareToken);
       }
     } catch (err) {
-      const msg = err.response?.data?.message || 'Invalid OTP';
-      setOtpError(msg);
+      const message =
+        err.response?.data?.message || 'Invalid OTP';
+
+      setOtpError(message);
+
+      if (
+        message.toLowerCase().includes('expired') ||
+        message.toLowerCase().includes(
+          'request a new otp'
+        )
+      ) {
+        clearOtpState(shareToken);
+        setOtpSent(false);
+        setResendSeconds(0);
+        otpRequestedRef.current = true;
+      }
+
       if (err.response?.status === 401) {
-        sessionStorage.setItem('pendingSharePath', `/share/${shareToken}`);
+        sessionStorage.setItem(
+          'pendingSharePath',
+          `/share/${shareToken}`
+        );
         localStorage.removeItem('token');
+        localStorage.removeItem('refreshToken');
         localStorage.removeItem('user');
         navigate('/login', { replace: true });
       }
