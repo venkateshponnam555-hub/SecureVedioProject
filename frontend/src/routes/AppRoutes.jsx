@@ -1,7 +1,7 @@
 // frontend/src/routes/AppRoutes.jsx
 
 import React from 'react';
-import { Routes, Route } from 'react-router-dom';
+import { Link, Route, Routes } from 'react-router-dom';
 
 import Home from '../pages/Home';
 import About from '../pages/About';
@@ -20,14 +20,20 @@ import ProtectedRoute from '../components/ProtectedRoute';
 const AppRoutes = () => {
   return (
     <Routes>
-
-      {/* Public Routes */}
+      {/* Public routes */}
       <Route path="/" element={<Home />} />
       <Route path="/about" element={<About />} />
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
 
-      {/* Protected Routes */}
+      {/* Shared link remains public initially.
+          SharedVideo handles login, OTP and receiver verification. */}
+      <Route
+        path="/share/:shareToken"
+        element={<SharedVideo />}
+      />
+
+      {/* Protected routes */}
       <Route
         path="/dashboard"
         element={
@@ -65,6 +71,15 @@ const AppRoutes = () => {
       />
 
       <Route
+        path="/watch/:id"
+        element={
+          <ProtectedRoute>
+            <WatchVideo />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
         path="/profile"
         element={
           <ProtectedRoute>
@@ -73,32 +88,27 @@ const AppRoutes = () => {
         }
       />
 
-
-      {/* Public Share & Watch Routes */}
-      <Route path="/watch/:id" element={<WatchVideo />} />
-      <Route path="/share/:shareToken" element={<SharedVideo />} />
-
-
       {/* 404 */}
       <Route
         path="*"
         element={
-          <div className="min-h-screen flex items-center justify-center">
-            <div className="glass-card p-12 text-center max-w-md">
+          <div className="min-h-screen flex items-center justify-center px-4">
+            <div className="glass-card p-12 text-center max-w-md w-full">
               <h2 className="text-xl font-semibold text-white mb-2">
                 404 - Page Not Found
               </h2>
-              <p className="text-slate-400 mb-4">
-                The page you're looking for doesn't exist.
+
+              <p className="text-slate-400 mb-6">
+                The page you&apos;re looking for doesn&apos;t exist.
               </p>
-              <a href="/" className="btn-primary inline-block">
+
+              <Link to="/" className="btn-primary inline-block">
                 Go Home
-              </a>
+              </Link>
             </div>
           </div>
         }
       />
-
     </Routes>
   );
 };

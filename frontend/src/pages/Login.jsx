@@ -1,22 +1,43 @@
 // frontend/src/pages/Login.jsx
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Shield, Mail, Lock, Eye, EyeOff, LogIn } from 'lucide-react';
 import { authService } from '../services/authService';
+
+const getSafePendingSharePath = () => {
+  const path = sessionStorage.getItem('pendingSharePath');
+  return path && path.startsWith('/share/') ? path : null;
+};
 
 const Login = () => {
   const [formData, setFormData] = useState({
     email: '',
     password: '',
   });
+
   const [showPassword, setShowPassword] = useState(false);
   const [errors, setErrors] = useState({});
   const [loading, setLoading] = useState(false);
   const [serverError, setServerError] = useState('');
 
   const navigate = useNavigate();
+
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+
+    if (!token) return;
+
+    const pendingSharePath = getSafePendingSharePath();
+
+    if (pendingSharePath) {
+      sessionStorage.removeItem('pendingSharePath');
+      navigate(pendingSharePath, { replace: true });
+    } else {
+      navigate('/dashboard', { replace: true });
+    }
+  }, [navigate]);
 
   const validateForm = () => {
     const newErrors = {};
@@ -34,16 +55,28 @@ const Login = () => {
     }
 
     setErrors(newErrors);
+
     return Object.keys(newErrors).length === 0;
   };
 
   const handleChange = (e) => {
     const { name, value } = e.target;
-    setFormData((prev) => ({ ...prev, [name]: value }));
+
+    setFormData((prev) => ({
+      ...prev,
+      [name]: value,
+    }));
+
     if (errors[name]) {
-      setErrors((prev) => ({ ...prev, [name]: '' }));
+      setErrors((prev) => ({
+        ...prev,
+        [name]: '',
+      }));
     }
-    if (serverError) setServerError('');
+
+    if (serverError) {
+      setServerError('');
+    }
   };
 
   const handleSubmit = async (e) => {
@@ -53,15 +86,39 @@ const Login = () => {
 
     setLoading(true);
     setServerError('');
+
     try {
-      const response = await authService.login(formData.email, formData.password);
-      console.log("LOGIN RESPONSE:", response);
-      localStorage.setItem('token', response.accessToken);
-      localStorage.setItem('refreshToken', response.refreshToken);
-      localStorage.setItem('user', JSON.stringify(response.user));
-      navigate('/dashboard');
+      const response = await authService.login(
+        formData.email.trim(),
+        formData.password
+      );
+
+      if (response?.accessToken) {
+        localStorage.setItem('token', response.accessToken);
+      }
+
+      if (response?.refreshToken) {
+        localStorage.setItem('refreshToken', response.refreshToken);
+      }
+
+      if (response?.user) {
+        localStorage.setItem('user', JSON.stringify(response.user));
+      }
+
+      const pendingSharePath = getSafePendingSharePath();
+
+      if (pendingSharePath) {
+        sessionStorage.removeItem('pendingSharePath');
+        navigate(pendingSharePath, { replace: true });
+      } else {
+        navigate('/dashboard', { replace: true });
+      }
     } catch (error) {
-      const message = error.response?.data?.message || 'Invalid email or password';
+      const message =
+        error.response?.data?.message ||
+        error.response?.data?.error ||
+        'Invalid email or password';
+
       setServerError(message);
     } finally {
       setLoading(false);
@@ -90,8 +147,12 @@ const Login = () => {
             >
               <Shield className="w-8 h-8 text-cyan-400" />
             </motion.div>
+
             <h1 className="text-2xl font-bold text-white">Welcome Back</h1>
-            <p className="text-slate-400 text-sm mt-1">Sign in to your SecureVault account</p>
+
+            <p className="text-slate-400 text-sm mt-1">
+              Sign in to your SecureVault account
+            </p>
           </div>
 
           {serverError && (
@@ -106,11 +167,15 @@ const Login = () => {
 
           <form onSubmit={handleSubmit} className="space-y-5">
             <div>
-              <label htmlFor="email" className="label">Email Address</label>
+              <label htmlFor="email" className="label">
+                Email Address
+              </label>
+
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 flex items-center pl-4 pointer-events-none z-10">
                   <Mail className="w-4 h-4 text-slate-500" />
                 </div>
+
                 <input
                   type="email"
                   id="email"
@@ -118,20 +183,31 @@ const Login = () => {
                   value={formData.email}
                   onChange={handleChange}
                   placeholder="you@example.com"
-                  className={`input-field ${errors.email ? 'input-field-error' : ''}`}
+                  className={`input-field ${
+                    errors.email ? 'input-field-error' : ''
+                  }`}
                   autoComplete="email"
                   style={{ paddingLeft: '48px' }}
                 />
               </div>
-              {errors.email && <p className="text-red-400 text-xs mt-1.5">{errors.email}</p>}
+
+              {errors.email && (
+                <p className="text-red-400 text-xs mt-1.5">
+                  {errors.email}
+                </p>
+              )}
             </div>
 
             <div>
-              <label htmlFor="password" className="label">Password</label>
+              <label htmlFor="password" className="label">
+                Password
+              </label>
+
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 flex items-center pl-4 pointer-events-none z-10">
                   <Lock className="w-4 h-4 text-slate-500" />
                 </div>
+
                 <input
                   type={showPassword ? 'text' : 'password'}
                   id="password"
@@ -139,23 +215,44 @@ const Login = () => {
                   value={formData.password}
                   onChange={handleChange}
                   placeholder="Enter your password"
-                  className={`input-field ${errors.password ? 'input-field-error' : ''}`}
+                  className={`input-field ${
+                    errors.password ? 'input-field-error' : ''
+                  }`}
                   autoComplete="current-password"
-                  style={{ paddingLeft: '48px', paddingRight: '48px' }}
+                  style={{
+                    paddingLeft: '48px',
+                    paddingRight: '48px',
+                  }}
                 />
+
                 <button
                   type="button"
-                  onClick={() => setShowPassword(!showPassword)}
+                  onClick={() => setShowPassword((prev) => !prev)}
                   className="absolute inset-y-0 right-0 flex items-center pr-4 z-10 text-slate-500 hover:text-slate-300 transition-colors"
+                  aria-label={
+                    showPassword ? 'Hide password' : 'Show password'
+                  }
                 >
-                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  {showPassword ? (
+                    <EyeOff className="w-4 h-4" />
+                  ) : (
+                    <Eye className="w-4 h-4" />
+                  )}
                 </button>
               </div>
-              {errors.password && <p className="text-red-400 text-xs mt-1.5">{errors.password}</p>}
+
+              {errors.password && (
+                <p className="text-red-400 text-xs mt-1.5">
+                  {errors.password}
+                </p>
+              )}
             </div>
 
             <div className="flex justify-end">
-              <Link to="/forgot-password" className="text-xs text-cyan-400 hover:text-cyan-300 transition-colors">
+              <Link
+                to="/forgot-password"
+                className="text-xs text-cyan-400 hover:text-cyan-300 transition-colors"
+              >
                 Forgot password?
               </Link>
             </div>
@@ -163,13 +260,17 @@ const Login = () => {
             <button
               type="submit"
               disabled={loading}
-              className="btn-primary w-full py-3 flex items-center justify-center gap-2"
+              className="btn-primary w-full py-3 flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
             >
               {loading ? (
                 <>
                   <motion.div
                     animate={{ rotate: 360 }}
-                    transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
+                    transition={{
+                      duration: 1,
+                      repeat: Infinity,
+                      ease: 'linear',
+                    }}
                     className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full"
                   />
                   Signing in...
@@ -187,14 +288,20 @@ const Login = () => {
             <div className="absolute inset-0 flex items-center">
               <div className="w-full border-t border-slate-700/50" />
             </div>
+
             <div className="relative flex justify-center text-xs">
-              <span className="px-2 bg-slate-900 text-slate-500">or</span>
+              <span className="px-2 bg-slate-900 text-slate-500">
+                or
+              </span>
             </div>
           </div>
 
           <p className="text-center text-sm text-slate-400">
-            Don't have an account?{' '}
-            <Link to="/register" className="text-cyan-400 hover:text-cyan-300 font-medium transition-colors">
+            Don&apos;t have an account?{' '}
+            <Link
+              to="/register"
+              className="text-cyan-400 hover:text-cyan-300 font-medium transition-colors"
+            >
               Create one now
             </Link>
           </p>

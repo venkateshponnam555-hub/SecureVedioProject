@@ -1,7 +1,7 @@
 // frontend/src/pages/SharedVideo.jsx
 
-import React, { useState, useEffect } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import React, { useState, useEffect, useRef } from 'react';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
   Shield,
@@ -12,25 +12,58 @@ import {
   CheckCircle,
   Play,
   RefreshCw,
+  Mail,
+  Hash,
 } from 'lucide-react';
 import { videoService } from '../services/videoService';
 import { api } from '../services/api';
 
+const getSafePendingSharePath = () => {
+  const path = sessionStorage.getItem('pendingSharePath');
+  return path && path.startsWith('/share/') ? path : null;
+};
+
 const SharedVideo = () => {
   const { shareToken } = useParams();
+  const navigate = useNavigate();
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [shareData, setShareData] = useState(null);
+
+  // OTP states
+  const [otp, setOtp] = useState('');
+  const [otpSending, setOtpSending] = useState(false);
+  const [otpSent, setOtpSent] = useState(false);
+  const [otpVerifying, setOtpVerifying] = useState(false);
+  const [otpVerified, setOtpVerified] = useState(false);
+  const [otpMessage, setOtpMessage] = useState('');
+  const [otpError, setOtpError] = useState('');
+  const [resendSeconds, setResendSeconds] = useState(0);
+  const [maskedEmail, setMaskedEmail] = useState('');
+  const [wrongReceiver, setWrongReceiver] = useState(false);
+
+  // Key exchange states
   const [sharedSecret, setSharedSecret] = useState(null);
   const [encryptedAesKey, setEncryptedAesKey] = useState(null);
   const [exchangeLoading, setExchangeLoading] = useState(false);
+  const [exchangeError, setExchangeError] = useState('');
+
+  // Stream states
   const [videoBlobUrl, setVideoBlobUrl] = useState(null);
   const [streamLoading, setStreamLoading] = useState(false);
+  const [streamError, setStreamError] = useState('');
+
+  const otpRequestedRef = useRef(false);
+  const resendTimerRef = useRef(null);
+
+  const isLoggedIn = !!localStorage.getItem('token');
 
   useEffect(() => {
     fetchShareData();
     return () => {
       if (videoBlobUrl) URL.revokeObjectURL(videoBlobUrl);
+      if (resendTimerRef.current) clearInterval(resendTimerRef.current);
     };
   }, [shareToken]);
 
@@ -40,6 +73,15 @@ const SharedVideo = () => {
     try {
       const response = await api.get(`/share/${shareToken}`);
       setShareData(response.data);
+
+      if (response.data.receiverEmailMasked) {
+        setMaskedEmail(response.data.receiverEmailMasked);
+      }
+
+      if (response.data.receiverVerified) {
+        setOtpVerified(true);
+        setOtpSent(true);
+      }
     } catch (err) {
       console.error('Failed to access shared video:', err);
       if (err.response?.status === 410) {
@@ -56,21 +98,128 @@ const SharedVideo = () => {
     }
   };
 
+  // Check login and redirect if needed
+  useEffect(() => {
+    if (!loading && shareData && !isLoggedIn) {
+      sessionStorage.setItem('pendingSharePath', `/share/${shareToken}`);
+      navigate('/login', { replace: true });
+    }
+  }, [loading, shareData, isLoggedIn]);
+
+  // Auto-send OTP after login and share data loaded
+  useEffect(() => {
+    if (
+      !loading &&
+      shareData &&
+      isLoggedIn &&
+      !otpVerified &&
+      !otpRequestedRef.current
+    ) {
+      otpRequestedRef.current = true;
+      handleSendOtp();
+    }
+  }, [loading, shareData, isLoggedIn, otpVerified]);
+
+  // Resend countdown
+  useEffect(() => {
+    if (resendSeconds > 0) {
+      resendTimerRef.current = setInterval(() => {
+        setResendSeconds((prev) => {
+          if (prev <= 1) {
+            clearInterval(resendTimerRef.current);
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    }
+    return () => {
+      if (resendTimerRef.current) clearInterval(resendTimerRef.current);
+    };
+  }, [resendSeconds]);
+
+  const handleSendOtp = async () => {
+    setOtpSending(true);
+    setOtpMessage('');
+    setOtpError('');
+    setWrongReceiver(false);
+    try {
+      const response = await api.post(`/share/send-otp/${shareToken}`);
+
+      if (response.data.alreadyVerified) {
+        setOtpVerified(true);
+        setOtpSent(true);
+        setOtpMessage('You are already verified.');
+        return;
+      }
+
+      setOtpSent(true);
+      setOtpMessage(response.data.message || 'OTP sent successfully');
+      setMaskedEmail(response.data.receiverEmailMasked || maskedEmail);
+      setResendSeconds(response.data.resendCooldownSeconds || 60);
+      setOtp('');
+      setOtpError('');
+    } catch (err) {
+      if (err.response?.status === 403) {
+        setWrongReceiver(true);
+        setOtpError('This video was shared with a different email account.');
+      } else if (err.response?.status === 401) {
+        sessionStorage.setItem('pendingSharePath', `/share/${shareToken}`);
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        navigate('/login', { replace: true });
+      } else {
+        setOtpError(err.response?.data?.message || 'Failed to send OTP');
+      }
+    } finally {
+      setOtpSending(false);
+    }
+  };
+
+  const handleVerifyOtp = async () => {
+    if (otp.length !== 6) return;
+    setOtpVerifying(true);
+    setOtpError('');
+    try {
+      const response = await api.post(`/share/verify-otp/${shareToken}`, {
+        otp: otp,
+      });
+
+      if (response.data.verified) {
+        setOtpVerified(true);
+        setOtpMessage('Email verified successfully!');
+        setOtpError('');
+      }
+    } catch (err) {
+      const msg = err.response?.data?.message || 'Invalid OTP';
+      setOtpError(msg);
+      if (err.response?.status === 401) {
+        sessionStorage.setItem('pendingSharePath', `/share/${shareToken}`);
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        navigate('/login', { replace: true });
+      }
+    } finally {
+      setOtpVerifying(false);
+    }
+  };
+
   const handleKeyExchange = async () => {
     setExchangeLoading(true);
+    setExchangeError('');
     try {
       const eccKeyPair = await generateECCKeyPair();
       const receiverPublicKey = eccKeyPair.publicKey;
 
       const response = await api.post(`/share/key-exchange/${shareToken}`, {
-        receiverPublicKey: receiverPublicKey
+        receiverPublicKey: receiverPublicKey,
       });
 
       setSharedSecret(response.data.sharedSecret);
       setEncryptedAesKey(response.data.encryptedAesKey);
     } catch (err) {
       console.error('Key exchange failed:', err);
-      setError(err.response?.data?.message || 'ECC key exchange failed.');
+      setExchangeError(err.response?.data?.message || 'ECC key exchange failed.');
     } finally {
       setExchangeLoading(false);
     }
@@ -82,14 +231,9 @@ const SharedVideo = () => {
       true,
       ['deriveBits']
     );
-
     const publicKeyRaw = await window.crypto.subtle.exportKey('spki', keyPair.publicKey);
     const publicKeyBase64 = arrayBufferToBase64(publicKeyRaw);
-
-    return {
-      publicKey: publicKeyBase64,
-      privateKey: keyPair.privateKey
-    };
+    return { publicKey: publicKeyBase64, privateKey: keyPair.privateKey };
   };
 
   const arrayBufferToBase64 = (buffer) => {
@@ -103,27 +247,41 @@ const SharedVideo = () => {
 
   const handleStreamVideo = async () => {
     if (!sharedSecret || !encryptedAesKey || !shareData) return;
-
     setStreamLoading(true);
+    setStreamError('');
     try {
       const streamUrl = videoService.getStreamUrl(shareData.videoId);
       const url = `${streamUrl}?sharedSecret=${encodeURIComponent(sharedSecret)}&encryptedAesKey=${encodeURIComponent(encryptedAesKey)}`;
-      const response = await fetch(url);
+      const token = localStorage.getItem('token');
+      const response = await fetch(url, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
 
       if (response.ok) {
         const blob = await response.blob();
-        const url = URL.createObjectURL(blob);
-        setVideoBlobUrl(url);
+        const blobUrl = URL.createObjectURL(blob);
+        setVideoBlobUrl(blobUrl);
       } else {
-        const errorData = await response.json();
-        setError(errorData.message || 'Failed to stream video');
+        const contentType = response.headers.get('content-type');
+        if (contentType && contentType.includes('application/json')) {
+          const errorData = await response.json();
+          setStreamError(errorData.message || 'Failed to stream video');
+        } else {
+          setStreamError('Failed to stream video');
+        }
       }
     } catch (err) {
       console.error('Stream failed:', err);
-      setError('Failed to stream video');
+      setStreamError('Failed to stream video');
     } finally {
       setStreamLoading(false);
     }
+  };
+
+  const handleOtpInputChange = (e) => {
+    const value = e.target.value.replace(/[^0-9]/g, '').slice(0, 6);
+    setOtp(value);
+    if (otpError) setOtpError('');
   };
 
   const formatBytes = (bytes) => {
@@ -201,7 +359,7 @@ const SharedVideo = () => {
           </div>
           <h1 className="text-3xl font-bold text-white mb-2">Secure Video Share</h1>
           <p className="text-slate-400">
-            {shareData?.senderName || 'Someone'} shared a video with you
+            {shareData?.senderId || 'Someone'} shared a video with you
           </p>
         </motion.div>
 
@@ -237,7 +395,7 @@ const SharedVideo = () => {
             </div>
             <div className="flex justify-between text-sm">
               <span className="text-slate-500">Shared By</span>
-              <span className="text-white">{shareData?.senderName || 'Unknown'}</span>
+              <span className="text-white">{shareData?.senderId || 'Unknown'}</span>
             </div>
             <div className="flex justify-between text-sm">
               <span className="text-slate-500">Chunks</span>
@@ -259,6 +417,7 @@ const SharedVideo = () => {
           </h2>
 
           <div className="space-y-4">
+            {/* Step 1: Link Verified */}
             <div className="flex items-center gap-3 p-3 rounded-xl bg-emerald-500/5 border border-emerald-500/10">
               <CheckCircle className="w-5 h-5 text-emerald-400" />
               <div>
@@ -267,11 +426,129 @@ const SharedVideo = () => {
               </div>
             </div>
 
+            {/* Step 2: Receiver Login Verified */}
+            <div className={`flex items-center gap-3 p-3 rounded-xl border ${
+              isLoggedIn
+                ? 'bg-emerald-500/5 border-emerald-500/10'
+                : 'bg-slate-800/20 border-slate-700/10'
+            }`}>
+              {isLoggedIn ? (
+                <CheckCircle className="w-5 h-5 text-emerald-400" />
+              ) : (
+                <div className="w-5 h-5 rounded-full border-2 border-slate-600" />
+              )}
+              <div>
+                <p className="text-sm text-white font-medium">Receiver Login Verified</p>
+                <p className="text-xs text-slate-500">
+                  {isLoggedIn ? 'Logged in successfully' : 'Login required'}
+                </p>
+              </div>
+            </div>
+
+            {/* Step 3: OTP Verification */}
+            <div className={`p-4 rounded-xl border ${
+              otpVerified
+                ? 'bg-emerald-500/5 border-emerald-500/10'
+                : wrongReceiver
+                ? 'bg-red-500/5 border-red-500/10'
+                : 'bg-slate-800/20 border-slate-700/10'
+            }`}>
+              <div className="flex items-center gap-3 mb-3">
+                {otpVerified ? (
+                  <CheckCircle className="w-5 h-5 text-emerald-400" />
+                ) : otpSending ? (
+                  <motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}>
+                    <RefreshCw className="w-5 h-5 text-cyan-400" />
+                  </motion.div>
+                ) : (
+                  <Mail className="w-5 h-5 text-slate-500" />
+                )}
+                <div className="flex-1">
+                  <p className="text-sm text-white font-medium">Email OTP Verification</p>
+                  <p className="text-xs text-slate-500">
+                    {otpVerified
+                      ? 'Email verified successfully'
+                      : wrongReceiver
+                      ? 'This video was shared with a different email account'
+                      : maskedEmail
+                      ? `OTP sent to ${maskedEmail}`
+                      : 'Verify your email with OTP'}
+                  </p>
+                </div>
+              </div>
+
+              {!otpVerified && !wrongReceiver && (
+                <div className="space-y-3">
+                  {otpSent && (
+                    <>
+                      <div className="flex items-center gap-2">
+                        <Hash className="w-4 h-4 text-slate-500" />
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          pattern="[0-9]*"
+                          autoComplete="one-time-code"
+                          maxLength={6}
+                          value={otp}
+                          onChange={handleOtpInputChange}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && otp.length === 6 && !otpVerifying) {
+                              handleVerifyOtp();
+                            }
+                          }}
+                          placeholder="Enter 6-digit OTP"
+                          className="input-field text-sm text-center tracking-widest"
+                          disabled={otpVerifying}
+                          style={{ letterSpacing: '0.5em' }}
+                        />
+                      </div>
+                      {otpError && (
+                        <p className="text-red-400 text-xs">{otpError}</p>
+                      )}
+                      {otpMessage && (
+                        <p className="text-emerald-400 text-xs">{otpMessage}</p>
+                      )}
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={handleVerifyOtp}
+                          disabled={otp.length !== 6 || otpVerifying}
+                          className="btn-primary py-1.5 px-4 text-xs disabled:opacity-50"
+                        >
+                          {otpVerifying ? (
+                            <motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
+                              className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full" />
+                          ) : (
+                            'Verify OTP'
+                          )}
+                        </button>
+                        <button
+                          onClick={handleSendOtp}
+                          disabled={resendSeconds > 0 || otpSending}
+                          className="btn-secondary py-1.5 px-3 text-xs"
+                        >
+                          {resendSeconds > 0 ? `Resend in ${resendSeconds}s` : 'Resend OTP'}
+                        </button>
+                      </div>
+                    </>
+                  )}
+                  {!otpSent && otpSending && (
+                    <p className="text-xs text-slate-400">Sending OTP...</p>
+                  )}
+                  {otpError && otpError.includes('different email') && (
+                    <p className="text-red-400 text-xs">{otpError}</p>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Step 4: ECC Key Exchange */}
             <div className={`flex items-center gap-3 p-3 rounded-xl border ${
               sharedSecret
                 ? 'bg-emerald-500/5 border-emerald-500/10'
                 : exchangeLoading
                 ? 'bg-cyan-500/5 border-cyan-500/10'
+                : !otpVerified
+                ? 'bg-slate-800/20 border-slate-700/10 opacity-50'
                 : 'bg-slate-800/20 border-slate-700/10'
             }`}>
               {sharedSecret ? (
@@ -288,14 +565,21 @@ const SharedVideo = () => {
                 <p className="text-xs text-slate-500">
                   {sharedSecret
                     ? 'Secure key exchange completed'
+                    : !otpVerified
+                    ? 'Verify OTP first'
+                    : exchangeError
+                    ? exchangeError
                     : 'Establish secure connection using P-521 curve'}
                 </p>
               </div>
-              {!sharedSecret && !exchangeLoading && (
-                <button onClick={handleKeyExchange} className="btn-primary py-1.5 px-4 text-xs">Start Exchange</button>
+              {otpVerified && !sharedSecret && !exchangeLoading && (
+                <button onClick={handleKeyExchange} className="btn-primary py-1.5 px-4 text-xs">
+                  Start Exchange
+                </button>
               )}
             </div>
 
+            {/* Step 5: Watch Video */}
             <div className={`flex items-center gap-3 p-3 rounded-xl border ${
               sharedSecret && encryptedAesKey
                 ? 'bg-cyan-500/5 border-cyan-500/10'
@@ -305,9 +589,11 @@ const SharedVideo = () => {
               <div className="flex-1">
                 <p className="text-sm text-white font-medium">Watch Video</p>
                 <p className="text-xs text-slate-500">
-                  {sharedSecret && encryptedAesKey
+                  {streamError
+                    ? streamError
+                    : sharedSecret && encryptedAesKey
                     ? 'Ready to decrypt and stream'
-                    : 'Complete key exchange first'}
+                    : 'Complete previous steps first'}
                 </p>
               </div>
               {sharedSecret && encryptedAesKey && !streamLoading && (
@@ -334,6 +620,7 @@ const SharedVideo = () => {
             <span className="badge-info">AES-256-GCM</span>
             <span className="badge-info">ECC P-521</span>
             <span className="badge-info">SHA-512</span>
+            <span className="badge-info">OTP Verified</span>
           </div>
         </motion.div>
       </div>

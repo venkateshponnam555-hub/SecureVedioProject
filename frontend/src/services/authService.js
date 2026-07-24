@@ -12,14 +12,29 @@ const AUTH_ENDPOINTS = {
   LOGOUT: '/auth/logout',
 };
 
+const clearLocalAuthData = () => {
+  localStorage.removeItem('token');
+  localStorage.removeItem('refreshToken');
+  localStorage.removeItem('user');
+};
+
 export const authService = {
   async login(email, password) {
-    const { data } = await api.post(AUTH_ENDPOINTS.LOGIN, { email, password });
+    const { data } = await api.post(AUTH_ENDPOINTS.LOGIN, {
+      email: email.trim(),
+      password,
+    });
+
     return data;
   },
 
   async register(userData) {
-    const { data } = await api.post(AUTH_ENDPOINTS.REGISTER, userData);
+    const { data } = await api.post(AUTH_ENDPOINTS.REGISTER, {
+      name: userData.name?.trim(),
+      email: userData.email?.trim(),
+      password: userData.password,
+    });
+
     return data;
   },
 
@@ -29,22 +44,60 @@ export const authService = {
   },
 
   async updateProfile(profileData) {
-    const { data } = await api.put(AUTH_ENDPOINTS.UPDATE_PROFILE, profileData);
+    const { data } = await api.put(
+      AUTH_ENDPOINTS.UPDATE_PROFILE,
+      profileData
+    );
+
     return data;
   },
 
   async changePassword(passwordData) {
-    const { data } = await api.put(AUTH_ENDPOINTS.CHANGE_PASSWORD, passwordData);
+    const { data } = await api.put(
+      AUTH_ENDPOINTS.CHANGE_PASSWORD,
+      passwordData
+    );
+
     return data;
   },
 
   async refreshToken(refreshToken) {
-    const { data } = await api.post(AUTH_ENDPOINTS.REFRESH, { refreshToken });
+    const { data } = await api.post(AUTH_ENDPOINTS.REFRESH, {
+      refreshToken,
+    });
+
     return data;
   },
 
   async logout() {
-    const { data } = await api.post(AUTH_ENDPOINTS.LOGOUT);
-    return data;
+    try {
+      const { data } = await api.post(AUTH_ENDPOINTS.LOGOUT);
+      return data;
+    } finally {
+      clearLocalAuthData();
+    }
+  },
+
+  clearAuthData() {
+    clearLocalAuthData();
+  },
+
+  isAuthenticated() {
+    return Boolean(localStorage.getItem('token'));
+  },
+
+  getStoredUser() {
+    const storedUser = localStorage.getItem('user');
+
+    if (!storedUser) {
+      return null;
+    }
+
+    try {
+      return JSON.parse(storedUser);
+    } catch {
+      localStorage.removeItem('user');
+      return null;
+    }
   },
 };
