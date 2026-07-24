@@ -37,6 +37,26 @@ public class ShareInfo {
 
     private String status;
 
+    // ===============================
+    // Receiver Verification
+    // ===============================
+    private boolean receiverVerified = false;
+
+    private String receiverUserId;
+
+    private Instant receiverVerifiedAt;
+
+    // ===============================
+    // OTP Details
+    // ===============================
+    private String otp;
+
+    private Instant otpExpiry;
+
+    private Instant otpSentAt;
+
+    private int otpAttempts = 0;
+
     public ShareInfo() {
         this.createdAt = Instant.now();
         this.used = false;
@@ -150,6 +170,70 @@ public class ShareInfo {
         this.status = status;
     }
 
+    // ===============================
+    // Receiver Verification
+    // ===============================
+
+    public boolean isReceiverVerified() {
+        return receiverVerified;
+    }
+
+    public void setReceiverVerified(boolean receiverVerified) {
+        this.receiverVerified = receiverVerified;
+    }
+
+    public String getReceiverUserId() {
+        return receiverUserId;
+    }
+
+    public void setReceiverUserId(String receiverUserId) {
+        this.receiverUserId = receiverUserId;
+    }
+
+    public Instant getReceiverVerifiedAt() {
+        return receiverVerifiedAt;
+    }
+
+    public void setReceiverVerifiedAt(Instant receiverVerifiedAt) {
+        this.receiverVerifiedAt = receiverVerifiedAt;
+    }
+
+    // ===============================
+    // OTP
+    // ===============================
+
+    public String getOtp() {
+        return otp;
+    }
+
+    public void setOtp(String otp) {
+        this.otp = otp;
+    }
+
+    public Instant getOtpExpiry() {
+        return otpExpiry;
+    }
+
+    public void setOtpExpiry(Instant otpExpiry) {
+        this.otpExpiry = otpExpiry;
+    }
+
+    public Instant getOtpSentAt() {
+        return otpSentAt;
+    }
+
+    public void setOtpSentAt(Instant otpSentAt) {
+        this.otpSentAt = otpSentAt;
+    }
+
+    public int getOtpAttempts() {
+        return otpAttempts;
+    }
+
+    public void setOtpAttempts(int otpAttempts) {
+        this.otpAttempts = otpAttempts;
+    }
+
     public boolean isExpired() {
         return Instant.now().isAfter(expiresAt);
     }
@@ -160,6 +244,8 @@ public class ShareInfo {
                 "id='" + id + '\'' +
                 ", shareToken='" + shareToken + '\'' +
                 ", videoId='" + videoId + '\'' +
+                ", receiverEmail='" + receiverEmail + '\'' +
+                ", receiverVerified=" + receiverVerified +
                 ", used=" + used +
                 ", status='" + status + '\'' +
                 '}';
