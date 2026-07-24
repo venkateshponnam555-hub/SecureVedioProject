@@ -40,16 +40,18 @@ public class SecurityConfig {
                         .requestMatchers("/api/auth/**").permitAll()
                         .requestMatchers("/api/share/**").permitAll()
 
-                        // Video APIs
+                        // Public video APIs
                         .requestMatchers("/api/videos/stream/**").permitAll()
                         .requestMatchers("/api/videos/download/**").permitAll()
                         .requestMatchers("/api/videos/metadata/**").permitAll()
 
-                        // Everything else requires login
+                        // Everything else requires authentication
                         .anyRequest().authenticated()
                 )
-                .addFilterBefore(jwtAuthenticationFilter,
-                        UsernamePasswordAuthenticationFilter.class);
+                .addFilterBefore(
+                        jwtAuthenticationFilter,
+                        UsernamePasswordAuthenticationFilter.class
+                );
 
         return http.build();
     }
@@ -63,7 +65,8 @@ public class SecurityConfig {
                 "http://localhost:5173",
                 "http://localhost:5174",
                 "http://localhost:5175",
-                "http://localhost:3000"
+                "http://localhost:3000",
+                "https://secure-vedio-project.vercel.app"
         ));
 
         configuration.setAllowedMethods(Arrays.asList(
@@ -78,7 +81,14 @@ public class SecurityConfig {
         configuration.setAllowedHeaders(Arrays.asList(
                 "Authorization",
                 "Content-Type",
-                "X-Requested-With"
+                "X-Requested-With",
+                "Accept",
+                "Origin"
+        ));
+
+        configuration.setExposedHeaders(Arrays.asList(
+                "Authorization",
+                "Content-Disposition"
         ));
 
         configuration.setAllowCredentials(true);
